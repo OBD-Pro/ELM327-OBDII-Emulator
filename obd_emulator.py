@@ -96,6 +96,63 @@ def pid_14_1B():
     B = random.randint(100, 160)  # Short term fuel trim (%): B = trim - 128
     return f"{A:02X} {B:02X}"
 
+def pid_oxygen_14_1B(pid_num):
+    """
+    Mode 01 O2 sensor voltage and STFT for PIDs 0x14..0x1B.
+    Returns two bytes: A = voltage (V) scaled by 200; B = STFT where percent = (B - 128) / 1.28.
+    Uses CAN-derived state when available for more realistic behavior.
+    """
+    # Map PID to (bank, sensor) semantics (simplified conventional mapping)
+    mapping = {
+        0x14: (1, 1),  # Bank 1 Sensor 1 (upstream)
+        0x15: (1, 2),  # Bank 1 Sensor 2 (upstream)
+        0x16: (2, 1),  # Bank 2 Sensor 1 (upstream)
+        0x17: (2, 2),  # Bank 2 Sensor 2 (upstream)
+        0x18: (1, 3),  # Bank 1 Sensor 3 (downstream)
+        0x19: (1, 4),  # Bank 1 Sensor 4 (downstream)
+        0x1A: (2, 3),  # Bank 2 Sensor 3 (downstream)
+        0x1B: (2, 4),  # Bank 2 Sensor 4 (downstream)
+    }
+    bank, sensor = mapping.get(pid_num, (1, 1))
+
+    st = globals().get('_EMU_STATE', {})
+    can = st.get('can_state') if isinstance(st, dict) else None
+
+    # Default/fallback random behavior if no CAN state is available
+    if not can:
+        voltage_v = random.uniform(0.05, 0.90)
+        trim_pct = random.uniform(-20.0, 20.0)
+    else:
+        tick = float(can.get('tick', 0))
+        acc = float(can.get('acc', 0.0))        # 0..100
+        rpm = float(can.get('rpm', 800))        # ~600..5000
+        speed = float(can.get('speed', 0.0))
+
+        # Estimate mixture deviation around stoich based on throttle/load
+        # Negative -> lean, Positive -> rich
+        load_factor = (acc / 100.0) - 0.25  # centered near cruise
+        rpm_factor = (rpm - 2000.0) / 3000.0
+        mixture_dev = 0.5 * load_factor + 0.2 * rpm_factor + random.uniform(-0.05, 0.05)
+
+        upstream = sensor in (1, 2)
+        if upstream:
+            # Upstream sensors oscillate around ~0.45 V with richer/leaner swings
+            osc = math.sin(2 * math.pi * ((tick + sensor * 7) % 40) / 40.0)
+            base = 0.45 + 0.35 * mixture_dev + 0.20 * osc
+            voltage_v = max(0.05, min(0.95, base + random.uniform(-0.03, 0.03)))
+        else:
+            # Downstream sensors are more stable, typically ~0.7-0.85 V
+            base = 0.78 + 0.10 * mixture_dev
+            voltage_v = max(0.50, min(0.95, base + random.uniform(-0.02, 0.02)))
+
+        # Short-term fuel trim reacts to mixture deviation (opposes it) with small noise
+        trim_pct = max(-25.0, min(25.0, (-mixture_dev * 50.0) + random.uniform(-2.0, 2.0)))
+
+    # Encode A and B per OBD scaling
+    A = max(0, min(255, int(voltage_v * 200)))
+    B = max(0, min(255, int(128 + (trim_pct * 1.28))))
+    return f"{A:02X} {B:02X}"
+
 def pid_24_2B():  # O2 Sensor current (CAN) and lambda
     # A,B => equivalent ratio; C,D => current in mA
     eq_ratio = random.uniform(0.95, 1.05)
@@ -326,7 +383,7 @@ def handle_obd(cmd):
 
     if cmd in {f"01{pid:02X}" for pid in range(0x14, 0x1C)}:
         pid_num = int(cmd[2:], 16)
-        return f"41 {pid_num:02X} {pid_14_1B()}"
+        return f"41 {pid_num:02X} {pid_oxygen_14_1B(pid_num)}"
 
     if cmd in {f"01{pid:02X}" for pid in range(0x24, 0x2C)}:
         pid_num = int(cmd[2:], 16)
