@@ -35,6 +35,16 @@ Windows (COM3 example):
 python obd_emulator.py -p COM3 -b 38400 -s idle -v
 ```
 
+Linux, Bluetooth (no arguments needed):
+```
+./run.sh
+```
+This creates `venv/` and installs pyserial on first run, makes sure BlueZ is running, powers the adapter on, names it `OBDII`, makes it discoverable and pairable, accepts pairing (PIN `1234` for devices that ask), registers the Serial Port Profile and starts the emulator. It serves both Bluetooth flavours at once:
+- **Android (Classic SPP):** pair with `OBDII` in Bluetooth settings, then pick it in the OBD app.
+- **iPhone (BLE):** do not pair in Settings; open the OBD app (Car Scanner, OBD Fusion, ...) and pick `OBDII` / choose a BLE adapter. The GATT services of common BLE ELM327 dongles are all offered: `FFF0` (notify `FFF1`, write `FFF2`), `FFE0` (`FFE1`), `18F0` (`2AF0`/`2AF1`) and Vgate `E7810A71-...` (`BEF8D6C9-...`). Replies are split to the negotiated MTU. The emulator survives disconnects and is restarted if it crashes; Ctrl+C stops everything and restores the adapter's discoverable/pairable settings. `OBD_BT_NAME=MyCar ./run.sh` changes the name.
+
+Other modes: `./run.sh -p /dev/ttyUSB0` (real serial device), `./run.sh --pty` (virtual port at `./obd-pty`), `./run.sh --tcp [PORT]` (Wi-Fi adapter: TCP server on port 35000 by default; apps connect to `<computer IP>:35000`). Emulator options such as `-s moving` are passed through in every mode.
+
 Linux (/dev/ttyUSB0 example):
 ```
 python obd_emulator.py -p /dev/ttyUSB0 -b 38400 -s stationary -v

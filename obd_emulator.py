@@ -420,11 +420,15 @@ def can_response_lines(payload, st):
         lines.append(f"{i & 0x0F:X}: {hx(f[2:] if i == 0 else f[1:])}")
     return "\r".join(lines)
 
+class Framed(str):
+    """A reply already laid out by can_response_lines (PCI byte / ISO-TP frames), not to be framed again."""
+
+
 def dtc_response(service, codes, st):
     payload = [service, len(codes)]
     for c in codes:
         payload.extend(dtc_to_bytes(c))
-    return can_response_lines(payload, st)
+    return Framed(can_response_lines(payload, st))
 
 def _ascii_to_hex_bytes(s):
     return " ".join(f"{ord(ch):02X}" for ch in s)
@@ -773,38 +777,26 @@ def handle_obd(cmd):
         return "41 40 94 00 10 00"
 
     if cmd == "0900":
-        return "4A 54 32 42 47 32 32 4B 34 56 30 31 32 33 34 35 36"
-        pass
+        return "49 00 55 40 00 00"  # 0902, 0904, 0906 (CVN-less), 090A supported
 
-    if cmd == "0902": 
-        vin = "MHXPB41BB1A123456"
-        data = _ascii_to_hex_bytes(vin).split(" ")
-        frames = []
-        chunk = []
-        for b in data:
-            chunk.append(b)
-            if len(chunk) >= 20:
-                frames.append("49 02 " + " ".join(chunk))
-                chunk = []
-        if chunk:
-            frames.append("49 02 " + " ".join(chunk))
-        return "\r".join(frames)
-
-
-    if cmd == "0904":
-        calid = gen_calibration_id()
-        s = _ascii_to_hex_bytes(calid)
-        parts = s.split(" ")
-        frames = []
-        while parts:
-            chunk = parts[:20]
-            parts = parts[20:]
-            frames.append("49 04 " + " ".join(chunk))
-        return "\r".join(frames)
-
-    if cmd == "0906":
-        ecu = gen_ecu_version()
-        return f"49 06 {_ascii_to_hex_bytes(ecu)}"
+    if cmd in ("0902", "0904", "0906", "090A"):
+        pid_num = int(cmd[2:], 16)
+        text = {0x02: _EMU_STATE.setdefault('vin', "MHXPB41BB1A123456"),
+                0x04: _EMU_STATE.setdefault('cal_id', gen_calibration_id()),
+                0x06: _EMU_STATE.setdefault('ecu_version', gen_ecu_version()),
+                0x0A: "ECM\0-EngineControl"}[pid_num]
+        data = [ord(ch) for ch in text]
+        if pid_num == 0x0A:
+            data = (data + [0] * 20)[:20]
+        elif pid_num == 0x04:
+            data = (data + [0] * 16)[:16]
+        if _EMU_STATE.get('headers'):
+            return Framed(can_response_lines([0x49, pid_num, 0x01] + data, _EMU_STATE))
+        if pid_num == 0x02:
+            # Headers off: VIN in 20-byte chunks (the format the app's live-data VIN reader expects)
+            hexes = [f"{b:02X}" for b in data]
+            return "\r".join("49 02 " + " ".join(hexes[i:i + 20]) for i in range(0, len(hexes), 20))
+        return f"49 {pid_num:02X} 01 " + " ".join(f"{b:02X}" for b in data)
 
     return "NO DATA"
 
@@ -1259,6 +1251,9 @@ def _gen_known_can_frames(st):
 def format_response(response, st):
     """Apply ATH (ECU header on each line) and ATS (spaces) to an OBD reply."""
     tx_id = st.get('tx_id', '7E8')
+    if st.get('headers') and not isinstance(response, Framed):
+        response = "\r".join(can_response_lines([int(b, 16) for b in l.split()], st)
+                             for l in response.split("\r") if l.strip())
     lines = response.split("\r")
     if st.get('headers'):
         lines = [l if l.startswith(tx_id) else f"{tx_id} {l}" for l in lines]
