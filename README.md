@@ -50,6 +50,40 @@ Linux (/dev/ttyUSB0 example):
 python obd_emulator.py -p /dev/ttyUSB0 -b 38400 -s stationary -v
 ```
 
+## Project layout
+
+The four files in the project root only start things. The code lives in `elm327/`:
+
+```
+obd_emulator.py          start on a serial port
+tcp_bridge.py            start as a Wi-Fi adapter
+pty_bridge.py            start on a virtual serial port
+bt_bridge.py             start as a Bluetooth adapter
+elm327/
+  cli.py                 command line options
+  emulator.py            builds and connects all the objects
+  hex_format.py          byte and hex helpers
+  adapter/               the ELM327 chip: AT commands, OBD services, reply format
+  vehicle/               the car: sensors, PIDs, trouble codes, identity
+  can/                   CAN traffic: idle bus, simulated traffic, monitor mode
+  transport/             serial, TCP and virtual serial connections
+  bluetooth/             BlueZ pairing, Classic SPP and BLE
+tests/                   unit tests
+```
+
+A command takes this path: `SerialServer` reads a line, `Elm327Adapter` sends it to `AtCommandHandler` or `ObdServiceHandler`, the current `Vehicle` supplies the values, and `ResponseFormatter` lays out the reply.
+
+To add a vehicle scenario, subclass `Vehicle` in `vehicle/base.py` and create it in `create_vehicle` in `emulator.py`.
+
+Run the tests and formatters:
+```
+venv/bin/python -m unittest discover
+black .
+ruff check .
+```
+
+Set `OBD_PTY` to move the `./obd-pty` link used by `./run.sh --pty`.
+
 ## Usage & Options
 - `-p/--port`: serial port device (e.g., `COM3`, `/dev/ttyUSB0`).
 - `-b/--baud`: baud rate (default 38400).
